@@ -1,0 +1,19 @@
+llm:
+  provider: "ollama"
+  model: "llama3.2:3b"
+  base_url: "http://localhost:11434"
+target:
+  authorized_ips:
+    - "127.0.0.1/32"
+    - "192.168.8.0/24"
+  max_scan_intensity: 3
+metasploit:
+  rpc_host: "127.0.0.1"
+  rpc_port: 55553
+  rpc_user: "msf"
+  rpc_pass: "changeme"
+burp:
+  api_url: "http://127.0.0.1:1337"
+  api_key: "YOUR_BURP_API_KEY"
+pqc:
+  enabled: true
