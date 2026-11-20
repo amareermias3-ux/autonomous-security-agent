@@ -15,18 +15,23 @@ st.caption("Multi-host pentest dashboard · For authorized testing only")
 
 # ─── Sidebar ───
 st.sidebar.header("🔧 Scan Control")
-target = st.sidebar.text_input("Target (IP or CIDR)", "192.168.8.1")
-intent = st.sidebar.selectbox("Intent", ["full_scan", "deploy_honeypot"])
-use_llm = st.sidebar.checkbox("LLM assessment (Ollama)", value=False)
 
-if st.sidebar.button("🚀 Start Scan", type="primary"):
+with st.sidebar.form("scan_form"):
+    target = st.text_input("Target (IP or CIDR)", "192.168.8.1")
+    intent = st.selectbox("Intent", ["full_scan", "deploy_honeypot"])
+    use_llm = st.checkbox("LLM assessment (Ollama)", value=False)
+    submitted = st.form_submit_button("🚀 Start Scan", type="primary")
+
+if submitted:
     if not target:
         st.sidebar.error("Enter a target")
     else:
         st.session_state["scan_target"] = target
         st.session_state["scan_intent"] = intent
         st.session_state["scan_llm"] = use_llm
-        st.rerun()
+        st.session_state.pop("scan_result", None)
+        st.session_state.pop("scan_explain", None)
+        st.session_state.pop("scan_report", None)
 
 # ─── Run scan ───
 if "scan_target" in st.session_state and "scan_result" not in st.session_state:
