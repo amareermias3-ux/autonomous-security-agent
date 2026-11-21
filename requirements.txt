@@ -1,0 +1,7 @@
+python-nmap>=0.7.1
+pymetasploit3>=1.0.6
+requests>=2.31.0
+PyYAML>=6.0
+rich>=13.0
+pqproof>=0.3.0
+streamlit>=1.30.0
