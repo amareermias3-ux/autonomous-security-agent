@@ -168,6 +168,16 @@ class AutonomousAgent:
         return results
 
     def report(self, results, target):
-        path = reporter.generate(results, target)
-        self.log.info("Report saved: " + path)
-        return path
+        # 1. Generate JSON & HTML
+        path_json = reporter.generate(results, target)
+        
+        # 2. Generate PDF
+        from modules import pdf_reporter
+        try:
+            path_pdf = pdf_reporter.generate_pdf(results, target)
+            print(f"[✓] PDF Report saved to: {path_pdf}")
+        except Exception as e:
+            print(f"[!] Failed to generate PDF: {e}")
+
+        self.log.info("Reports saved: " + path_json)
+        return path_json
