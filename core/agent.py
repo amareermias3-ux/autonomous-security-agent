@@ -3,7 +3,8 @@ import ipaddress
 import logging
 import os
 from datetime import datetime
-from modules import recon_nmap, exploit_msf, web_burp, pqc_checker, honeypot_gen, threat_intel, ai_analyzer, remediation
+from modules import (recon_nmap, exploit_msf, web_burp, pqc_checker, 
+                     honeypot_gen, threat_intel, ai_analyzer, remediation, domain_recon)
 from core import llm, reporter
 
 
@@ -32,6 +33,13 @@ class AutonomousAgent:
         self.authorized = self.config["target"]["authorized_ips"]
         self.log = _setup_logger()
         self.log.info("Agent initialized")
+
+    def _is_ip(self, target):
+        try:
+            ipaddress.ip_address(target)
+            return True
+        except ValueError:
+            return False
 
     def _is_authorized(self, target_ip):
         try:
@@ -84,23 +92,34 @@ class AutonomousAgent:
             "You are a security analyst. Write a brief 3-5 sentence "
             "security assessment:\n\n" + summary
         )
-    def _is_ip(self, target):
-        try:
-            ipaddress.ip_address(target)
-            return True
-        except ValueError:
-            return False
         return llm.query(prompt, self.config_path)
 
     def execute(self, target_ip, user_intent="full_scan"):
         self.log.info("Starting scan: target=" + target_ip + " intent=" + user_intent)
 
+        # --- 1. Resolve Domain First ---
+        original_target = target_ip
+        if not self._is_ip(target_ip):
+            print("[*] Target is a domain. Resolving to IP...")
+            resolved_ip = domain_recon.resolve_domain(target_ip)
+            if not resolved_ip:
+                return {"error": "Could not resolve domain: " + target_ip}
+            print(f"[✓] Resolved {target_ip} to {resolved_ip}")
+            target_ip = resolved_ip
+
+        # --- 2. Check Authorization ---
         if not self._is_authorized(target_ip):
             self.log.warning("Unauthorized target: " + target_ip)
-            return {"error": "Target " + target_ip + " is not authorized."}
+            return {"error": f"Resolved IP ({target_ip}) for {original_target} is not authorized. Add it to config/settings.yaml"}
 
         results = {}
+        if original_target != target_ip:
+            results["domain"] = original_target
+            results["resolved_ip"] = target_ip
+            print("[*] Enumerating subdomains...")
+            results["subdomains"] = domain_recon.scan_subdomains(original_target)
 
+        # --- 3. Main Scan Sequence ---
         print("[1/6] Running Nmap reconnaissance...")
         results["nmap"] = recon_nmap.run_scan(target_ip)
 
@@ -123,6 +142,7 @@ class AutonomousAgent:
         else:
             print("[2/6] No open ports - skipping MSF")
             print("[3/6] No open ports - skipping AI Threat Analysis")
+            print("[4/6] No open ports - skipping Remediation")
 
         if results["nmap"].get("http_services"):
             print("[5/6] Running Burp web scan...")
@@ -145,29 +165,6 @@ class AutonomousAgent:
             results["honeypot"] = honeypot_gen.deploy_deception_network(target_ip)
 
         self.log.info("Scan complete")
-        # --- NEW: Domain Resolution ---
-        original_target = target_ip
-        if not self._is_ip(target_ip):
-            print("[*] Target is a domain. Resolving to IP...")
-            from modules import domain_recon
-            resolved_ip = domain_recon.resolve_domain(target_ip)
-            if not resolved_ip:
-                return {"error": "Could not resolve domain: " + target_ip}
-            print(f"[✓] Resolved {target_ip} to {resolved_ip}")
-            
-            # Check if the resolved IP is authorized
-            if not self._is_authorized(resolved_ip):
-                return {"error": f"Resolved IP ({resolved_ip}) is not in authorized_ips."}
-            
-            target_ip = resolved_ip
-            results = {"domain": original_target, "resolved_ip": resolved_ip}
-            
-            # Run subdomain enumeration
-            subs = domain_recon.scan_subdomains(original_target)
-            results["subdomains"] = subs
-        else:
-            results = {}
-        # ------------------------------
         return results
 
     def report(self, results, target):

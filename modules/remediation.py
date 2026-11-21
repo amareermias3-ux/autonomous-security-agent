@@ -15,8 +15,8 @@ def generate_remediation(nmap_results, msf_results, ai_analysis, config_path="co
     context += ai_analysis + "\n"
 
     prompt = f"""
-    You are an elite Cybersecurity Engineer. 
-    Based on the scan below, provide a remediation plan.
+    You are an elite Cybersecurity Engineer (DevSecOps). 
+    Based on the target scan and threat analysis below, write a remediation plan.
     
     CRITICAL RULES:
     1. The target might be a Linux Server, Windows Machine, OR a Network Router/IoT device.
@@ -26,8 +26,6 @@ def generate_remediation(nmap_results, msf_results, ai_analysis, config_path="co
 
     {context}
     
-    ### Remediation Plan:
-    """
     ### Remediation Plan:
     """
 
