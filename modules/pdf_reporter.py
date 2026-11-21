@@ -1,10 +1,26 @@
 import os
+import re
 from datetime import datetime
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
+
+def clean_markdown_for_pdf(text):
+    """Converts Markdown syntax to ReportLab compatible HTML tags."""
+    if not text:
+        return ""
+    # Convert Headers
+    text = re.sub(r'### (.*?)\n', r'<br/><b><font color="#2e75b6">\1</font></b><br/>', text)
+    text = re.sub(r'## (.*?)\n', r'<br/><b><font color="#1f4e79">\1</font></b><br/>', text)
+    # Convert Bold
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    # Convert Newlines
+    text = text.replace('\n', '<br/>')
+    # Remove raw backticks
+    text = text.replace('```bash', '').replace('```', '')
+    return text
 
 def generate_pdf(results, target, output_dir="output"):
     os.makedirs(output_dir, exist_ok=True)
@@ -28,7 +44,7 @@ def generate_pdf(results, target, output_dir="output"):
     normal_style = styles['Normal']
 
     # --- Title & Meta ---
-    elements.append(Paragraph(f"🛡️ Security Assessment Report", title_style))
+    elements.append(Paragraph("🛡️ Security Assessment Report", title_style))
     elements.append(Paragraph(f"<b>Target:</b> {target}", normal_style))
     elements.append(Paragraph(f"<b>Date:</b> {ts}", normal_style))
     elements.append(Spacer(1, 15))
@@ -61,7 +77,7 @@ def generate_pdf(results, target, output_dir="output"):
     # --- Open Ports Table ---
     elements.append(Paragraph("🔍 Open Ports", h2_style))
     port_data = [["Host", "Port", "Service"]]
-    for p in nmap.get("open_ports", [])[:15]:  # limit to 15 for PDF size
+    for p in nmap.get("open_ports", [])[:15]:
         port_data.append([p.get("host", ""), str(p.get("port", "")), p.get("service", "")])
     
     if len(port_data) > 1:
@@ -80,14 +96,13 @@ def generate_pdf(results, target, output_dir="output"):
     # --- AI Threat Analysis & Remediation ---
     if "ai_threat_analysis" in results:
         elements.append(Paragraph("🧠 AI Threat Analysis", h2_style))
-        # Wrap text for PDF
-        ai_text = results["ai_threat_analysis"].replace('\n', '<br/>')
+        ai_text = clean_markdown_for_pdf(results["ai_threat_analysis"])
         elements.append(Paragraph(ai_text, normal_style))
         elements.append(Spacer(1, 10))
 
     if "remediation_plan" in results:
         elements.append(Paragraph("🛠️ Automated Remediation Plan", h2_style))
-        rem_text = results["remediation_plan"].replace('\n', '<br/>').replace('**', '')
+        rem_text = clean_markdown_for_pdf(results["remediation_plan"])
         elements.append(Paragraph(rem_text, normal_style))
 
     # --- Build PDF ---
