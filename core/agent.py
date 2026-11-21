@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime
 from modules import (recon_nmap, exploit_msf, web_burp, pqc_checker, 
-                     honeypot_gen, threat_intel, ai_analyzer, remediation, domain_recon)
+                     honeypot_gen, threat_intel, domain_recon)
 from core import llm, reporter
 
 
@@ -127,18 +127,31 @@ class AutonomousAgent:
             print("[2/6] Checking Metasploit exploits...")
             results["msf"] = exploit_msf.check_exploits(target_ip, results["nmap"]["open_ports"])
             
-            print("[3/6] Fetching global Threat Intelligence & AI Analysis...")
+            print("[3/6] Fetching global Threat Intelligence...")
             threats = threat_intel.fetch_latest_cves(limit=5)
             results["threat_intel"] = threats
             
-            ai_assessment = ai_analyzer.analyze_threats(results["nmap"], threats, self.config_path)
-            results["ai_threat_analysis"] = ai_assessment
+            # --- 4. COMBINED AI PROMPT (Threat Analysis + Remediation) ---
+            print("[4/6] AI generating combined threat analysis & remediation (Fast Mode)...")
+            context = "=== SCAN RESULTS ===\n"
+            for port in results["nmap"].get("open_ports", []):
+                context += f"Host: {port['host']} | Port: {port['port']} | Service: {port['service']}\n"
+            
+            combined_prompt = f"""
+            You are an elite Cybersecurity AI.
+            Based on the scan results below, provide two things clearly separated:
+            1. A 2-sentence Threat Analysis.
+            2. A brief 3-step Remediation Plan.
+            Keep the total response under 150 words.
 
-            print("[4/6] AI generating automated remediation plan...")
-            rem_plan = remediation.generate_remediation(
-                results["nmap"], results["msf"], ai_assessment, self.config_path
-            )
-            results["remediation_plan"] = rem_plan
+            {context}
+            """
+            
+            ai_response = llm.query(combined_prompt, self.config_path)
+            
+            # የመጣውን መልስ በሁለቱም ቁልፎች ስር እናስቀምጥ (ለ UI እና PDF)
+            results["ai_threat_analysis"] = ai_response
+            results["remediation_plan"] = "Please refer to the AI Analysis section for the remediation steps."
         else:
             print("[2/6] No open ports - skipping MSF")
             print("[3/6] No open ports - skipping AI Threat Analysis")

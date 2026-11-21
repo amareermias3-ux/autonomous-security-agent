@@ -1,6 +1,6 @@
 llm:
   provider: "ollama"
-  model: "llama3.2:3b"
+  model: "llama3.2:1b"  # <--- ከ 3b ወደ 1b ቀይረነዋል
   base_url: "http://localhost:11434"
 target:
   authorized_ips:
@@ -17,3 +17,10 @@ burp:
   api_key: "YOUR_BURP_API_KEY"
 pqc:
   enabled: true
+monitor:
+  interval_minutes: 2  # ለፈተና በየ 2 ደቂቃው (ከፈተና በኋላ ወደ 60 መልሰው)
+  telegram:
+    bot_token: "9258091277:AAES_5GqsgGvOvdSDFQsZ82W2JP6uKu2IAc"
+    chat_id: "8878200031"
+dashboard:
+  password: "admin123"  # ይህንን ወደ ፈለክበት ቀይረው

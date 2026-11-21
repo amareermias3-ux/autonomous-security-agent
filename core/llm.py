@@ -13,8 +13,15 @@ def query(prompt, config_path="config/settings.yaml"):
         try:
             resp = requests.post(
                 base_url + "/api/generate",
-                json={"model": model, "prompt": prompt, "stream": False},
-                timeout=300
+                json={
+                    "model": model, 
+                    "prompt": prompt, 
+                    "stream": False,
+                    "options": {
+                        "num_predict": 200  # <--- ከ200 ቃላት በላይ እንዳይጽፍ መገደቢያ (ለፍጥነት)
+                    }
+                },
+                timeout=180 # ጊዜውን ከ300 ወደ 180 ቀንሰነዋል (ከ3 ደቂቃ በላይ እንዳይጠብቅ)
             )
             if resp.status_code == 200:
                 return resp.json().get("response", "").strip()
