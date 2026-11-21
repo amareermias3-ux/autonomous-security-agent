@@ -3,7 +3,7 @@ import ipaddress
 import logging
 import os
 from datetime import datetime
-from modules import recon_nmap, exploit_msf, web_burp, pqc_checker, honeypot_gen
+from modules import recon_nmap, exploit_msf, web_burp, pqc_checker, honeypot_gen, threat_intel, ai_analyzer
 from core import llm, reporter
 
 
@@ -37,8 +37,11 @@ class AutonomousAgent:
         try:
             target = ipaddress.ip_address(target_ip)
             for net in self.authorized:
-                if target in ipaddress.ip_network(net):
-                    return True
+                try:
+                    if target in ipaddress.ip_network(net):
+                        return True
+                except ValueError:
+                    self.log.warning("Invalid network format in config: " + str(net))
             return False
         except ValueError:
             try:
@@ -47,9 +50,12 @@ class AutonomousAgent:
                 self.log.error("Invalid target: " + target_ip)
                 return False
             for net in self.authorized:
-                if target_net.subnet_of(ipaddress.ip_network(net)):
-                    return True
-            return False
+                try:
+                    if target_net.subnet_of(ipaddress.ip_network(net)):
+                        return True
+                except ValueError:
+                    self.log.warning("Invalid network format in config: " + str(net))
+            return False    
 
     def think(self, user_query):
         prompt = (
@@ -70,6 +76,10 @@ class AutonomousAgent:
             summary += "  * Port " + str(p["port"]) + " (" + p["service"] + ")\n"
         msf = results.get("msf", {})
         summary += "- Exploit candidates: " + str(msf.get("count", 0)) + "\n"
+        
+        if "ai_threat_analysis" in results:
+            summary += "- AI Threat Analysis: " + results["ai_threat_analysis"] + "\n"
+
         prompt = (
             "You are a security analyst. Write a brief 3-5 sentence "
             "security assessment:\n\n" + summary
@@ -77,8 +87,7 @@ class AutonomousAgent:
         return llm.query(prompt, self.config_path)
 
     def execute(self, target_ip, user_intent="full_scan"):
-        self.log.info("Starting scan: target=" + target_ip +
-                      " intent=" + user_intent)
+        self.log.info("Starting scan: target=" + target_ip + " intent=" + user_intent)
 
         if not self._is_authorized(target_ip):
             self.log.warning("Unauthorized target: " + target_ip)
@@ -86,61 +95,41 @@ class AutonomousAgent:
 
         results = {}
 
-        print("[1/4] Running Nmap reconnaissance...")
-        self.log.info("Running nmap")
+        print("[1/5] Running Nmap reconnaissance...")
         results["nmap"] = recon_nmap.run_scan(target_ip)
-        self.log.info("Nmap: " + str(len(results["nmap"].get("open_ports", []))) + " ports")
-
-        # Collect individual hosts for per-host modules
-        is_cidr = "/" in target_ip
-        if is_cidr:
-            hosts = results["nmap"].get("hosts", [])
-            if not hosts:
-                hosts = [target_ip]
-        else:
-            hosts = [target_ip]
 
         if results["nmap"].get("open_ports"):
-            print("[2/4] Checking Metasploit exploits...")
-            self.log.info("Checking MSF")
-            results["msf"] = exploit_msf.check_exploits(
-                target_ip, results["nmap"]["open_ports"])
-            self.log.info("MSF: " + str(results["msf"].get("count", 0)) + " candidates")
+            print("[2/5] Checking Metasploit exploits...")
+            results["msf"] = exploit_msf.check_exploits(target_ip, results["nmap"]["open_ports"])
+            
+            print("[3/5] Fetching global Threat Intelligence & AI Analysis...")
+            threats = threat_intel.fetch_latest_cves(limit=5)
+            results["threat_intel"] = threats
+            
+            ai_assessment = ai_analyzer.analyze_threats(results["nmap"], threats, self.config_path)
+            results["ai_threat_analysis"] = ai_assessment
         else:
-            print("[2/4] No open ports - skipping MSF")
-            self.log.info("Skipping MSF (no ports)")
+            print("[2/5] No open ports - skipping MSF")
+            print("[3/5] No open ports - skipping AI Threat Analysis")
 
         if results["nmap"].get("http_services"):
-            print("[3/4] Running Burp web scan...")
-            self.log.info("Running Burp")
-            burp_results = []
-            for host in hosts[:5]:
-                burp_results.append({
-                    "host": host,
-                    "result": web_burp.scan_web(host)
-                })
-            results["burp"] = burp_results
+            print("[4/5] Running Burp web scan...")
+            results["burp"] = []
+            for host in results["nmap"].get("hosts", [target_ip])[:5]:
+                results["burp"].append({"host": host, "result": web_burp.scan_web(host)})
         else:
-            print("[3/4] No HTTP - skipping Burp")
-            self.log.info("Skipping Burp")
+            print("[4/5] No HTTP - skipping Burp")
 
         if self.config["pqc"]["enabled"] and results["nmap"].get("tls_services"):
-            print("[4/4] Checking PQC...")
-            self.log.info("Running PQC")
-            pqc_results = []
-            for host in hosts[:5]:
-                pqc_results.append({
-                    "host": host,
-                    "result": pqc_checker.check_tls(host)
-                })
-            results["pqc"] = pqc_results
+            print("[5/5] Checking PQC...")
+            results["pqc"] = []
+            for host in results["nmap"].get("hosts", [target_ip])[:5]:
+                results["pqc"].append({"host": host, "result": pqc_checker.check_tls(host)})
         else:
-            print("[4/4] No TLS - skipping PQC")
-            self.log.info("Skipping PQC")
+            print("[5/5] No TLS - skipping PQC")
 
         if user_intent == "deploy_honeypot":
             print("[+] Deploying honeypot...")
-            self.log.info("Deploying honeypot")
             results["honeypot"] = honeypot_gen.deploy_deception_network(target_ip)
 
         self.log.info("Scan complete")

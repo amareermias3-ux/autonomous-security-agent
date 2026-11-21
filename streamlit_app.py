@@ -72,7 +72,7 @@ if "scan_result" in st.session_state:
         st.info("🤖 **LLM Assessment**\n\n" + st.session_state["scan_explain"])
 
     # Tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["🔍 Ports", "💣 Exploits", "🔐 TLS/PQC", "📄 Raw JSON"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Ports", "💣 Exploits", "🧠 AI Threat Intel", "🔐 TLS/PQC", "📄 Raw JSON"])
 
     with tab1:
         ports = nmap.get("open_ports", [])
@@ -98,6 +98,20 @@ if "scan_result" in st.session_state:
             st.info("No exploit candidates")
 
     with tab3:
+        st.subheader("🤖 AI Security Assessment")
+        ai_text = results.get("ai_threat_analysis", "No AI analysis available.")
+        st.info(ai_text)
+        
+        st.subheader("🌍 Latest Threat Intelligence (CVEs)")
+        intel = results.get("threat_intel", [])
+        if isinstance(intel, list) and intel:
+            for item in intel:
+                st.markdown(f"**{item['id']}** (CVSS: {item['cvss']})")
+                st.caption(item['summary'])
+        else:
+            st.warning("No threat intel data found.")
+
+    with tab4:
         pqc = results.get("pqc", [])
         if isinstance(pqc, list) and pqc:
             for item in pqc:
@@ -109,17 +123,8 @@ if "scan_result" in st.session_state:
         else:
             st.info("No TLS data")
 
-    with tab4:
+    with tab5:
         st.json(results)
-
-    if "scan_report" in st.session_state:
-        st.success("📄 Report saved: " + st.session_state["scan_report"])
-
-    if st.button("🔄 Clear and start over"):
-        for k in ["scan_target", "scan_intent", "scan_result", "scan_explain", "scan_report"]:
-            st.session_state.pop(k, None)
-        st.rerun()
-
 # ─── Previous reports ───
 st.divider()
 st.subheader("📁 Previous Reports")
