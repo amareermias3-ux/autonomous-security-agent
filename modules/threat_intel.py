@@ -12,29 +12,25 @@ def fetch_latest_cves(limit=10):
             data = response.json()
             cves = []
             for item in data[:limit]:
+            for item in data[:limit]:
                 # CVSS Score logic
                 cvss = "N/A"
-                if "cvss3" in item and item["cvss3"]:
-                    cvss = item["cvss3"].get("baseScore", "N/A")
-                elif "cvss" in item and item["cvss"]:
-                    cvss = item["cvss"]
+                if isinstance(item, dict):
+                    if item.get("cvss3"):
+                        cvss = item["cvss3"].get("baseScore", "N/A")
+                    elif item.get("cvss"):
+                        cvss = item["cvss"]
 
-                                # Summary logic (handling different API sources)
-                summary = item.get("summary") or item.get("title") or item.get("description")
-                if not summary:
-                    summary = "Detailed description not provided."
-                    # If it's a list (some sources return lists), take the first item
-                    if isinstance(item.get("summary", []), list) and len(item["summary"]) > 0:
-                        summary = item["summary"][0]
-                    else:
-                        summary = "Detailed description not provided by source."
+                    # Summary logic
+                    summary = item.get("summary") or item.get("title") or item.get("description") or "No description provided."
+                else:
+                    summary = str(item) # Fallback if item is not a dict
 
                 cves.append({
-                    "id": item.get("id", "Unknown"),
+                    "id": item.get("id", "Unknown") if isinstance(item, dict) else "Unknown",
                     "summary": summary,
                     "cvss": cvss
-                })
-            
+                })            
             os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
             with open(CACHE_FILE, "w") as f:
                 json.dump(cves, f, indent=2)
