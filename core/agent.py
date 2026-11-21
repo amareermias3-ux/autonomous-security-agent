@@ -3,7 +3,7 @@ import ipaddress
 import logging
 import os
 from datetime import datetime
-from modules import recon_nmap, exploit_msf, web_burp, pqc_checker, honeypot_gen, threat_intel, ai_analyzer
+from modules import recon_nmap, exploit_msf, web_burp, pqc_checker, honeypot_gen, threat_intel, ai_analyzer, remediation
 from core import llm, reporter
 
 
@@ -55,7 +55,7 @@ class AutonomousAgent:
                         return True
                 except ValueError:
                     self.log.warning("Invalid network format in config: " + str(net))
-            return False    
+            return False
 
     def think(self, user_query):
         prompt = (
@@ -84,6 +84,12 @@ class AutonomousAgent:
             "You are a security analyst. Write a brief 3-5 sentence "
             "security assessment:\n\n" + summary
         )
+    def _is_ip(self, target):
+        try:
+            ipaddress.ip_address(target)
+            return True
+        except ValueError:
+            return False
         return llm.query(prompt, self.config_path)
 
     def execute(self, target_ip, user_intent="full_scan"):
@@ -95,44 +101,73 @@ class AutonomousAgent:
 
         results = {}
 
-        print("[1/5] Running Nmap reconnaissance...")
+        print("[1/6] Running Nmap reconnaissance...")
         results["nmap"] = recon_nmap.run_scan(target_ip)
 
         if results["nmap"].get("open_ports"):
-            print("[2/5] Checking Metasploit exploits...")
+            print("[2/6] Checking Metasploit exploits...")
             results["msf"] = exploit_msf.check_exploits(target_ip, results["nmap"]["open_ports"])
             
-            print("[3/5] Fetching global Threat Intelligence & AI Analysis...")
+            print("[3/6] Fetching global Threat Intelligence & AI Analysis...")
             threats = threat_intel.fetch_latest_cves(limit=5)
             results["threat_intel"] = threats
             
             ai_assessment = ai_analyzer.analyze_threats(results["nmap"], threats, self.config_path)
             results["ai_threat_analysis"] = ai_assessment
+
+            print("[4/6] AI generating automated remediation plan...")
+            rem_plan = remediation.generate_remediation(
+                results["nmap"], results["msf"], ai_assessment, self.config_path
+            )
+            results["remediation_plan"] = rem_plan
         else:
-            print("[2/5] No open ports - skipping MSF")
-            print("[3/5] No open ports - skipping AI Threat Analysis")
+            print("[2/6] No open ports - skipping MSF")
+            print("[3/6] No open ports - skipping AI Threat Analysis")
 
         if results["nmap"].get("http_services"):
-            print("[4/5] Running Burp web scan...")
+            print("[5/6] Running Burp web scan...")
             results["burp"] = []
             for host in results["nmap"].get("hosts", [target_ip])[:5]:
                 results["burp"].append({"host": host, "result": web_burp.scan_web(host)})
         else:
-            print("[4/5] No HTTP - skipping Burp")
+            print("[5/6] No HTTP - skipping Burp")
 
         if self.config["pqc"]["enabled"] and results["nmap"].get("tls_services"):
-            print("[5/5] Checking PQC...")
+            print("[6/6] Checking PQC...")
             results["pqc"] = []
             for host in results["nmap"].get("hosts", [target_ip])[:5]:
                 results["pqc"].append({"host": host, "result": pqc_checker.check_tls(host)})
         else:
-            print("[5/5] No TLS - skipping PQC")
+            print("[6/6] No TLS - skipping PQC")
 
         if user_intent == "deploy_honeypot":
             print("[+] Deploying honeypot...")
             results["honeypot"] = honeypot_gen.deploy_deception_network(target_ip)
 
         self.log.info("Scan complete")
+        # --- NEW: Domain Resolution ---
+        original_target = target_ip
+        if not self._is_ip(target_ip):
+            print("[*] Target is a domain. Resolving to IP...")
+            from modules import domain_recon
+            resolved_ip = domain_recon.resolve_domain(target_ip)
+            if not resolved_ip:
+                return {"error": "Could not resolve domain: " + target_ip}
+            print(f"[✓] Resolved {target_ip} to {resolved_ip}")
+            
+            # Check if the resolved IP is authorized
+            if not self._is_authorized(resolved_ip):
+                return {"error": f"Resolved IP ({resolved_ip}) is not in authorized_ips."}
+            
+            target_ip = resolved_ip
+            results = {"domain": original_target, "resolved_ip": resolved_ip}
+            
+            # Run subdomain enumeration
+            subs = domain_recon.scan_subdomains(original_target)
+            results["subdomains"] = subs
+        else:
+            results = {}
+        # ------------------------------
         return results
 
     def report(self, results, target):
