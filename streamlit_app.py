@@ -122,8 +122,7 @@ if "scan_result" in st.session_state:
         st.info("🤖 **LLM Assessment**\n\n" + st.session_state["scan_explain"])
 
     # Tabs
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🔍 Ports", "💣 Exploits", "🧠 AI Threat Intel", "🛠️ Remediation", "🔐 TLS/PQC", "📄 Raw JSON"])
-
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🔍 Ports", "💣 Exploits", "🚨 NSE Vulns", "🧠 AI Threat Intel", "🛠️ Remediation", "🔐 TLS/PQC", "📄 Raw JSON"])
     with tab1:
         ports = nmap.get("open_ports", [])
         if ports:
@@ -161,7 +160,15 @@ if "scan_result" in st.session_state:
             st.dataframe(display, width="stretch")
         else:
             st.info("No exploit candidates")
-
+    with tab3:
+        vulns = nmap.get("vulnerabilities", [])
+        if vulns:
+            st.warning(f"Found {len(vulns)} potential vulnerabilities via Nmap NSE.")
+            for v in vulns:
+                with st.expander(f"Port {v['port']} - {v['script']}"):
+                    st.code(v['output'], language="text")
+        else:
+            st.success("No vulnerabilities detected by NSE scripts (or NSE is disabled).")
     with tab3:
         st.subheader("🤖 AI Security Assessment")
         ai_text = results.get("ai_threat_analysis", "No AI analysis available.")

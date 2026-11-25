@@ -131,16 +131,24 @@ class AutonomousAgent:
             threats = threat_intel.fetch_latest_cves(limit=5)
             results["threat_intel"] = threats
             
-            # --- 4. COMBINED AI PROMPT (Threat Analysis + Remediation) ---
+            # --- 4. COMBINED AI PROMPT (Threat Analysis + Remediation + NSE) ---
             print("[4/6] AI generating combined threat analysis & remediation (Fast Mode)...")
             context = "=== SCAN RESULTS ===\n"
             for port in results["nmap"].get("open_ports", []):
                 context += f"Host: {port['host']} | Port: {port['port']} | Service: {port['service']}\n"
             
+            # NSE ውጤቶችን ወደ AI ማካተት
+            vulns = results["nmap"].get("vulnerabilities", [])
+            if vulns:
+                context += "\n=== NSE VULNERABILITY FINDINGS ===\n"
+                for v in vulns:
+                    context += f"Host: {v['host']} | Port: {v['port']} | Script: {v['script']}\n"
+                    context += f"Output: {v['output']}\n"
+
             combined_prompt = f"""
             You are an elite Cybersecurity AI.
-            Based on the scan results below, provide two things clearly separated:
-            1. A 2-sentence Threat Analysis.
+            Based on the scan results and NSE findings below, provide:
+            1. A 2-sentence Threat Analysis prioritizing the NSE findings.
             2. A brief 3-step Remediation Plan.
             Keep the total response under 150 words.
 
@@ -149,6 +157,8 @@ class AutonomousAgent:
             
             ai_response = llm.query(combined_prompt, self.config_path)
             
+            results["ai_threat_analysis"] = ai_response
+            results["remediation_plan"] = "Please refer to the AI Analysis section for the remediation steps."            
             # የመጣውን መልስ በሁለቱም ቁልፎች ስር እናስቀምጥ (ለ UI እና PDF)
             results["ai_threat_analysis"] = ai_response
             results["remediation_plan"] = "Please refer to the AI Analysis section for the remediation steps."

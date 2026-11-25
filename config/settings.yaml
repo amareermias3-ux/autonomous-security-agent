@@ -7,6 +7,7 @@ target:
     - "127.0.0.1/32"
     - "192.168.8.0/24"
   max_scan_intensity: 3
+  enable_nse: true  # <--- ይህን ጨምር
 metasploit:
   rpc_host: "127.0.0.1"
   rpc_port: 55553
