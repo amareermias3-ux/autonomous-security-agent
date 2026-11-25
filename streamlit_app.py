@@ -4,6 +4,8 @@ import os
 import glob
 from datetime import datetime
 import yaml
+import time
+import threading
 import altair as alt
 import pandas as pd
 
@@ -15,10 +17,12 @@ st.set_page_config(
 )
 
 # ─── Authentication Logic ───
-with open("config/settings.yaml") as f:
-    config = yaml.safe_load(f)
-    
-DASHBOARD_PASS = config.get("dashboard", {}).get("password", "admin123")
+try:
+    with open("config/settings.yaml") as f:
+        config = yaml.safe_load(f)
+    DASHBOARD_PASS = config.get("dashboard", {}).get("password", "admin123")
+except Exception:
+    DASHBOARD_PASS = "admin123"
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -27,7 +31,7 @@ if not st.session_state.authenticated:
     st.title("🔒 Secure Login")
     st.markdown("Please enter the dashboard password to access the security agent.")
     password = st.text_input("Password", type="password")
-    if st.button("Login", type="primary"):
+    if st.button("Login", type="primary", key="login_btn"):
         if password == DASHBOARD_PASS:
             st.session_state.authenticated = True
             st.rerun()
@@ -42,7 +46,7 @@ st.caption("Multi-host pentest dashboard · For authorized testing only")
 # ─── Sidebar ───
 st.sidebar.header("🔧 Scan Control")
 
-if st.sidebar.button("Logout"):
+if st.sidebar.button("Logout", key="logout_btn"):
     st.session_state.authenticated = False
     st.rerun()
 
@@ -101,14 +105,18 @@ if "scan_result" in st.session_state:
     c3.metric("HTTP Services", len(nmap.get("http_services", [])))
     c4.metric("Exploit Candidates", msf.get("count", 0))
 
-    # --- NEW: Risk Visualization Chart ---
+    # --- Risk Visualization Chart ---
     st.markdown("### 📊 Risk Distribution")
     chart_data = pd.DataFrame({
-        "Category": ["Open Ports", "HTTP Services", "Exploit Candidates"],
-        "Count": [len(nmap.get("open_ports", [])), len(nmap.get("http_services", [])), msf.get("count", 0)]
+        "Category": ["Open Ports", "HTTP Services", "Exploit Candidates", "NSE Vulns"],
+        "Count": [
+            len(nmap.get("open_ports", [])), 
+            len(nmap.get("http_services", [])), 
+            msf.get("count", 0),
+            len(nmap.get("vulnerabilities", []))
+        ]
     })
     
-    # Create a bar chart using Altair
     chart = alt.Chart(chart_data).mark_bar(color="#ff4b4b").encode(
         x=alt.X('Category', sort=None, axis=alt.Axis(labelAngle=0)),
         y='Count',
@@ -117,34 +125,37 @@ if "scan_result" in st.session_state:
     
     st.altair_chart(chart, width="stretch")
     st.divider()
-    # LLM assessment
+
+    # LLM assessment (If checked in sidebar)
     if "scan_explain" in st.session_state:
         st.info("🤖 **LLM Assessment**\n\n" + st.session_state["scan_explain"])
 
-    # Tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🔍 Ports", "💣 Exploits", "🚨 NSE Vulns", "🧠 AI Threat Intel", "🛠️ Remediation", "🔐 TLS/PQC", "📄 Raw JSON"])
+    # ─── Tabs ───
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        "🔍 Ports", "💣 Exploits", "🚨 NSE Vulns", "🧠 AI Threat Intel", 
+        "🛠️ Remediation", "🔐 TLS/PQC", "📄 Raw JSON", "🕵️ Live Monitor"
+    ])
+
     with tab1:
         ports = nmap.get("open_ports", [])
         if ports:
-            # Show table
             st.dataframe(ports, width="stretch")
             
-            # --- NEW: Port Distribution Pie Chart ---
+            # Port Distribution Pie Chart
             df_ports = pd.DataFrame(ports)
             if not df_ports.empty and 'service' in df_ports.columns:
                 st.markdown("#### Port Services Distribution")
                 service_counts = df_ports['service'].value_counts().reset_index()
                 service_counts.columns = ['Service', 'Count']
-                
                 pie_chart = alt.Chart(service_counts).mark_arc(innerRadius=50).encode(
                     theta=alt.Theta(field="Count", type="quantitative"),
                     color=alt.Color(field="Service", type="nominal"),
                     tooltip=['Service', 'Count']
                 ).properties(height=300)
-                
                 st.altair_chart(pie_chart, width="stretch")
         else:
             st.info("No open ports found")
+
     with tab2:
         cands = msf.get("candidates", [])
         if cands:
@@ -160,6 +171,7 @@ if "scan_result" in st.session_state:
             st.dataframe(display, width="stretch")
         else:
             st.info("No exploit candidates")
+
     with tab3:
         vulns = nmap.get("vulnerabilities", [])
         if vulns:
@@ -169,8 +181,9 @@ if "scan_result" in st.session_state:
                     st.code(v['output'], language="text")
         else:
             st.success("No vulnerabilities detected by NSE scripts (or NSE is disabled).")
-    with tab3:
-        st.subheader("🤖 AI Security Assessment")
+
+    with tab4:
+        st.subheader("🧠 AI Threat Analysis")
         ai_text = results.get("ai_threat_analysis", "No AI analysis available.")
         st.info(ai_text)
         
@@ -183,12 +196,12 @@ if "scan_result" in st.session_state:
         else:
             st.warning("No threat intel data found.")
 
-    with tab4:
+    with tab5:
         st.subheader("🛠️ Automated Remediation Plan")
         rem = results.get("remediation_plan", "No remediation plan generated.")
         st.markdown(rem)
 
-    with tab5:
+    with tab6:
         pqc = results.get("pqc", [])
         if isinstance(pqc, list) and pqc:
             for item in pqc:
@@ -200,13 +213,75 @@ if "scan_result" in st.session_state:
         else:
             st.info("No TLS data")
 
-    with tab6:
+    with tab7:
         st.json(results)
 
+    with tab8:
+        st.subheader("🕵️ Continuous Monitoring (Live)")
+        st.markdown("Run the background monitor directly from the dashboard.")
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            mon_target = st.text_input("Monitor Target (IP or Domain)", "192.168.8.1", key="mon_target")
+        with col2:
+            st.write("") 
+            st.write("")
+            if st.button("▶️ Start Monitor", type="primary", key="start_mon_btn"):
+                if "mon_thread" not in st.session_state or not st.session_state.mon_thread.is_alive():
+                    st.session_state.monitoring = True
+                    
+                    def mon_loop():
+                        from modules import recon_nmap, monitor, alerts
+                        while st.session_state.get("monitoring", False):
+                            # Run scan silently in background
+                            nmap_results = recon_nmap.run_scan(mon_target)
+                            old_state = monitor.get_previous_state(mon_target)
+                            alert_msg = monitor.compare_states(old_state, nmap_results, mon_target)
+                            
+                            # Write to log file
+                            with open("logs/live_monitor.log", "a") as f:
+                                if alert_msg:
+                                    alerts.send_telegram_alert(alert_msg)
+                                    f.write(f"[{datetime.now().strftime('%H:%M:%S')}] ALERT: {alert_msg.replace(chr(10), ' ')}\n")
+                                    monitor.save_current_state(mon_target, nmap_results)
+                                else:
+                                    if not old_state:
+                                        f.write(f"[{datetime.now().strftime('%H:%M:%S')}] Baseline scan saved for {mon_target}.\n")
+                                        monitor.save_current_state(mon_target, nmap_results)
+                                    else:
+                                        f.write(f"[{datetime.now().strftime('%H:%M:%S')}] Scan OK. No changes.\n")
+                            
+                            time.sleep(120) # Wait 2 minutes
+                            
+                    st.session_state.mon_thread = threading.Thread(target=mon_loop, daemon=True)
+                    st.session_state.mon_thread.start()
+                    st.success("Monitoring started in background. Wait 2 minutes for the first scan.")
+                else:
+                    st.warning("Monitor is already running.")
+
+        if st.button("⏹️ Stop Monitor", key="stop_mon_btn"):
+            st.session_state.monitoring = False
+            st.warning("Stopping monitor... (It will stop after the current scan finishes)")
+
+        st.divider()
+        st.markdown("#### 📜 Live Logs")
+        
+        log_file = "logs/live_monitor.log"
+        if os.path.exists(log_file):
+            with open(log_file, "r") as f:
+                logs = f.read()
+            st.text_area("Event Log", logs, height=300, disabled=True)
+            if st.button("Clear Logs", key="clear_logs_btn"):
+                open(log_file, "w").close()
+                st.rerun()
+        else:
+            st.info("No logs yet. Start the monitor to see live events.")
+
+    # Buttons below tabs
     if "scan_report" in st.session_state:
         st.success("📄 Report saved: " + st.session_state["scan_report"])
 
-    if st.button("🔄 Clear and start over"):
+    if st.button("🔄 Clear and start over", key="clear_btn"):
         for k in ["scan_target", "scan_intent", "scan_result", "scan_explain", "scan_report"]:
             st.session_state.pop(k, None)
         st.rerun()
