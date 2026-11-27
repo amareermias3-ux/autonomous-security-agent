@@ -51,7 +51,7 @@ if st.sidebar.button("Logout", key="logout_btn"):
     st.rerun()
 
 with st.sidebar.form("scan_form"):
-    target = st.text_input("Target (IP or CIDR)", "192.168.8.1")
+    target = st.text_input("Target (IP, Domain, or CIDR)", "192.168.8.1")
     intent = st.selectbox("Intent", ["full_scan", "deploy_honeypot"])
     use_llm = st.checkbox("LLM assessment (Ollama)", value=False)
     submitted = st.form_submit_button("🚀 Start Scan", type="primary")
@@ -228,40 +228,42 @@ if "scan_result" in st.session_state:
             st.write("")
             if st.button("▶️ Start Monitor", type="primary", key="start_mon_btn"):
                 if "mon_thread" not in st.session_state or not st.session_state.mon_thread.is_alive():
-                    st.session_state.monitoring = True
+                    stop_event = threading.Event()
+                    st.session_state.stop_monitor_event = stop_event
                     
-                    def mon_loop():
+                    def mon_loop(target_ip, stop_event):
                         from modules import recon_nmap, monitor, alerts
-                        while st.session_state.get("monitoring", False):
+                        while not stop_event.is_set():
                             # Run scan silently in background
-                            nmap_results = recon_nmap.run_scan(mon_target)
-                            old_state = monitor.get_previous_state(mon_target)
-                            alert_msg = monitor.compare_states(old_state, nmap_results, mon_target)
+                            nmap_results = recon_nmap.run_scan(target_ip)
+                            old_state = monitor.get_previous_state(target_ip)
+                            alert_msg = monitor.compare_states(old_state, nmap_results, target_ip)
                             
                             # Write to log file
                             with open("logs/live_monitor.log", "a") as f:
                                 if alert_msg:
                                     alerts.send_telegram_alert(alert_msg)
                                     f.write(f"[{datetime.now().strftime('%H:%M:%S')}] ALERT: {alert_msg.replace(chr(10), ' ')}\n")
-                                    monitor.save_current_state(mon_target, nmap_results)
+                                    monitor.save_current_state(target_ip, nmap_results)
                                 else:
                                     if not old_state:
-                                        f.write(f"[{datetime.now().strftime('%H:%M:%S')}] Baseline scan saved for {mon_target}.\n")
-                                        monitor.save_current_state(mon_target, nmap_results)
+                                        f.write(f"[{datetime.now().strftime('%H:%M:%S')}] Baseline scan saved for {target_ip}.\n")
+                                        monitor.save_current_state(target_ip, nmap_results)
                                     else:
                                         f.write(f"[{datetime.now().strftime('%H:%M:%S')}] Scan OK. No changes.\n")
                             
-                            time.sleep(120) # Wait 2 minutes
+                            stop_event.wait(120) # Wait 2 minutes or until stopped
                             
-                    st.session_state.mon_thread = threading.Thread(target=mon_loop, daemon=True)
+                    st.session_state.mon_thread = threading.Thread(target=mon_loop, args=(mon_target, stop_event), daemon=True)
                     st.session_state.mon_thread.start()
                     st.success("Monitoring started in background. Wait 2 minutes for the first scan.")
                 else:
                     st.warning("Monitor is already running.")
 
         if st.button("⏹️ Stop Monitor", key="stop_mon_btn"):
-            st.session_state.monitoring = False
-            st.warning("Stopping monitor... (It will stop after the current scan finishes)")
+            if "stop_monitor_event" in st.session_state:
+                st.session_state.stop_monitor_event.set()
+            st.warning("Stopping monitor...")
 
         st.divider()
         st.markdown("#### 📜 Live Logs")

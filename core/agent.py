@@ -2,6 +2,7 @@ import yaml
 import ipaddress
 import logging
 import os
+import concurrent.futures
 from datetime import datetime
 from modules import (recon_nmap, exploit_msf, web_burp, pqc_checker, 
                      honeypot_gen, threat_intel, domain_recon)
@@ -93,103 +94,96 @@ class AutonomousAgent:
             "security assessment:\n\n" + summary
         )
         return llm.query(prompt, self.config_path)
-
-    def execute(self, target_ip, user_intent="full_scan"):
-        self.log.info("Starting scan: target=" + target_ip + " intent=" + user_intent)
-
-        # --- 1. Resolve Domain First ---
-        original_target = target_ip
-        if not self._is_ip(target_ip):
-            print("[*] Target is a domain. Resolving to IP...")
-            resolved_ip = domain_recon.resolve_domain(target_ip)
-            if not resolved_ip:
-                return {"error": "Could not resolve domain: " + target_ip}
-            print(f"[✓] Resolved {target_ip} to {resolved_ip}")
-            target_ip = resolved_ip
-
-        # --- 2. Check Authorization ---
+    def _scan_single_target(self, target_ip):
+        """Runs the scan logic for a single IP/Domain (Used for multi-threading)"""
+        self.log.info(f"Starting parallel scan for: {target_ip}")
+        
+        # Authorization check
         if not self._is_authorized(target_ip):
-            self.log.warning("Unauthorized target: " + target_ip)
-            return {"error": f"Resolved IP ({target_ip}) for {original_target} is not authorized. Add it to config/settings.yaml"}
+            return {"target": target_ip, "error": "Not authorized"}
 
-        results = {}
-        if original_target != target_ip:
-            results["domain"] = original_target
-            results["resolved_ip"] = target_ip
-            print("[*] Enumerating subdomains...")
-            results["subdomains"] = domain_recon.scan_subdomains(original_target)
-
-        # --- 3. Main Scan Sequence ---
-        print("[1/6] Running Nmap reconnaissance...")
-        results["nmap"] = recon_nmap.run_scan(target_ip)
-
-        if results["nmap"].get("open_ports"):
-            print("[2/6] Checking Metasploit exploits...")
-            results["msf"] = exploit_msf.check_exploits(target_ip, results["nmap"]["open_ports"])
+        res = {}
+        print(f"[*] Scanning {target_ip}...")
+        
+        # 1. Nmap
+        res["nmap"] = recon_nmap.run_scan(target_ip)
+        
+        # 2. MSF & AI
+        if res["nmap"].get("open_ports"):
+            res["msf"] = exploit_msf.check_exploits(target_ip, res["nmap"]["open_ports"])
             
-            print("[3/6] Fetching global Threat Intelligence...")
-            threats = threat_intel.fetch_latest_cves(limit=5)
-            results["threat_intel"] = threats
+            threats = threat_intel.fetch_latest_cves(limit=3)
+            res["threat_intel"] = threats
             
-            # --- 4. COMBINED AI PROMPT (Threat Analysis + Remediation + NSE) ---
-            print("[4/6] AI generating combined threat analysis & remediation (Fast Mode)...")
-            context = "=== SCAN RESULTS ===\n"
-            for port in results["nmap"].get("open_ports", []):
-                context += f"Host: {port['host']} | Port: {port['port']} | Service: {port['service']}\n"
+            context = f"=== SCAN RESULTS for {target_ip} ===\n"
+            for port in res["nmap"].get("open_ports", []):
+                context += f"Port: {port['port']} | Service: {port['service']}\n"
             
-            # NSE ውጤቶችን ወደ AI ማካተት
-            vulns = results["nmap"].get("vulnerabilities", [])
+            vulns = res["nmap"].get("vulnerabilities", [])
             if vulns:
-                context += "\n=== NSE VULNERABILITY FINDINGS ===\n"
+                context += "\nNSE FINDINGS:\n"
                 for v in vulns:
-                    context += f"Host: {v['host']} | Port: {v['port']} | Script: {v['script']}\n"
-                    context += f"Output: {v['output']}\n"
+                    context += f"- {v['script']} on port {v['port']}\n"
 
-            combined_prompt = f"""
-            You are an elite Cybersecurity AI.
-            Based on the scan results and NSE findings below, provide:
-            1. A 2-sentence Threat Analysis prioritizing the NSE findings.
-            2. A brief 3-step Remediation Plan.
-            Keep the total response under 150 words.
-
-            {context}
-            """
-            
+            combined_prompt = f"You are an AI. Provide a 2-sentence Threat Analysis and a 3-step Remediation Plan for this scan. Keep under 100 words.\n\n{context}"
             ai_response = llm.query(combined_prompt, self.config_path)
+            res["ai_threat_analysis"] = ai_response
+            res["remediation_plan"] = "See AI Analysis."
+        else:
+            res["msf"] = {"candidates": [], "count": 0}
+            res["ai_threat_analysis"] = "No open ports found."
+            res["remediation_plan"] = "N/A"
+
+        # 3. PQC
+        if self.config["pqc"]["enabled"] and res["nmap"].get("tls_services"):
+            res["pqc"] = [{"host": target_ip, "result": pqc_checker.check_tls(target_ip)}]
             
-            results["ai_threat_analysis"] = ai_response
-            results["remediation_plan"] = "Please refer to the AI Analysis section for the remediation steps."            
-            # የመጣውን መልስ በሁለቱም ቁልፎች ስር እናስቀምጥ (ለ UI እና PDF)
-            results["ai_threat_analysis"] = ai_response
-            results["remediation_plan"] = "Please refer to the AI Analysis section for the remediation steps."
+        return {"target": target_ip, "data": res}
+    def execute(self, target_input, user_intent="full_scan"):
+        self.log.info("Starting scan sequence: target=" + target_input)
+
+        # 1. Parse targets (Comma separated or CIDR)
+        targets_to_scan = []
+        
+        # If it's a domain, resolve it
+        if not self._is_ip(target_input) and "/" not in target_input:
+            print(f"[*] Resolving domain: {target_input}")
+            resolved = domain_recon.resolve_domain(target_input)
+            if not resolved:
+                return {"error": f"Could not resolve {target_input}"}
+            targets_to_scan = [resolved]
+        elif "/" in target_input:
+            # It's a CIDR, Nmap can handle it directly, but let's just pass it to Nmap for speed
+            print(f"[*] CIDR range detected: {target_input}. Nmap will handle the expansion.")
+            targets_to_scan = [target_input]
         else:
-            print("[2/6] No open ports - skipping MSF")
-            print("[3/6] No open ports - skipping AI Threat Analysis")
-            print("[4/6] No open ports - skipping Remediation")
+            # It's a single or comma-separated IP list
+            targets_to_scan = [ip.strip() for ip in target_input.split(",") if ip.strip()]
 
-        if results["nmap"].get("http_services"):
-            print("[5/6] Running Burp web scan...")
-            results["burp"] = []
-            for host in results["nmap"].get("hosts", [target_ip])[:5]:
-                results["burp"].append({"host": host, "result": web_burp.scan_web(host)})
-        else:
-            print("[5/6] No HTTP - skipping Burp")
+        all_results = {}
+        
+        # If it's a single target, run normally to keep backward compatibility
+        if len(targets_to_scan) == 1:
+            single_res = self._scan_single_target(targets_to_scan[0])
+            if "error" in single_res:
+                return single_res
+            return single_res["data"]
 
-        if self.config["pqc"]["enabled"] and results["nmap"].get("tls_services"):
-            print("[6/6] Checking PQC...")
-            results["pqc"] = []
-            for host in results["nmap"].get("hosts", [target_ip])[:5]:
-                results["pqc"].append({"host": host, "result": pqc_checker.check_tls(host)})
-        else:
-            print("[6/6] No TLS - skipping PQC")
-
-        if user_intent == "deploy_honeypot":
-            print("[+] Deploying honeypot...")
-            results["honeypot"] = honeypot_gen.deploy_deception_network(target_ip)
-
-        self.log.info("Scan complete")
-        return results
-
+        # --- Multi-Target Execution ---
+        print(f"[*] Starting parallel scan for {len(targets_to_scan)} targets...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(self._scan_single_target, t): t for t in targets_to_scan}
+            
+            for future in concurrent.futures.as_completed(futures):
+                target_ip = futures[future]
+                try:
+                    res = future.result()
+                    all_results[target_ip] = res.get("data", res)
+                except Exception as exc:
+                    print(f"[!] Target {target_ip} generated an exception: {exc}")
+                    all_results[target_ip] = {"error": str(exc)}
+                    
+        return all_results
     def report(self, results, target):
         # 1. Generate JSON & HTML
         path_json = reporter.generate(results, target)
