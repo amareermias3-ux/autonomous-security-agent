@@ -207,11 +207,24 @@ if "scan_result" in st.session_state:
             for item in pqc:
                 host = item.get("host", "?")
                 res = item.get("result", {})
-                info = res.get("tls_info") or res.get("error") or ""
-                with st.expander("Host: " + host):
-                    st.code(info, language="text")
+                
+                threat_level = res.get("threat_level", "UNKNOWN")
+                reason = res.get("threat_reason", "")
+                raw_info = res.get("raw_info") or res.get("error") or ""
+                
+                with st.expander(f"Host: {host} - Status: {threat_level}", expanded=True):
+                    if threat_level == "CRITICAL":
+                        st.error(f"🔴 **QUANTUM VULNERABLE:** {reason}")
+                    elif threat_level == "WARNING":
+                        st.warning(f"🟡 **WARNING:** {reason}")
+                    elif threat_level == "SAFE":
+                        st.success(f"🟢 **QUANTUM SAFE:** {reason}")
+                    else:
+                        st.info(f"ℹ️ **STATUS UNKNOWN:** {reason}")
+                        
+                    st.code(raw_info, language="text")
         else:
-            st.info("No TLS data")
+            st.info("No TLS data found.")
 
     with tab7:
         st.json(results)
